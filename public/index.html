@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>wassup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root {
+    --bg: #17140f; --paper: #1f1b14; --ink: #ecdfc4; --ink-dim: #a89778;
+    --amber: #d69a3a; --rust: #c0632b; --line: #3a3226;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); font-family: 'Courier Prime', monospace; }
+  .font-display { font-family: 'Fraunces', serif; }
+  textarea, input, button, select { font-family: inherit; }
+  textarea::placeholder { color: var(--ink-dim); opacity: 0.7; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .fade-up { animation: fadeUp 0.5s ease both; }
+  .glow-btn:hover { box-shadow: 0 0 24px rgba(214,154,58,0.25); }
+  .day-row:hover { border-color: var(--amber); }
+  button:disabled { cursor: default; }
+  select, input[type="number"] {
+    background: transparent; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 4px; padding: 6px 8px; font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { useState, useEffect, useRef, useMemo } = React;
+const h = React.createElement;
+
+const RECALL_OPTIONS = [
+  { value: 1, label: "1 day" },
+  { value: 3, label: "3 days" },
+  { value: 7, label: "7 days" },
+  { value: 30, label: "1 month" },
+  { value: 90, label: "3 months" },
+  { value: 180, label: "6 months" },
+  { value: 365, label: "1 year" },
+  { value: 730, label: "2 years" },
+  { value: "custom", label: "custom" },
+];
+
+async function api(path, opts) {
+  opts = opts || {};
+  const headers = Object.assign({
+    "x-timezone-offset": String(new Date().getTimezoneOffset()),
+  }, opts.headers || {});
+  if (opts.body && !headers["Content-Type"] && !(opts.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
+  const res = await fetch(path, Object.assign({ credentials: "include" }, opts, { headers }));
+  const ct = res.headers.get("content-type") || "";
+  const data = ct.includes("application/json") ? await res.json() : { text: await res.text() };
+  if (!res.ok) {
+    const error = new Error(data.error || "Request failed");
+    error.status = res.status;
+    throw error;
+  }
+  return data;
+}
+
+function formatDayTitle(dayKey) {
+  if (!dayKey) return "";
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    month: "long", day: "numeric", year: "numeric",
+  });
+}
+
+function previewText(text, n) {
+  const t = (text || "").replace(/\s+/g, " ").trim();
+  if (t.length <= n) return t;
+  return t.slice(0, n).trim() + "…";
+}
+
+function groupByDay(entries) {
+  const map = {};
+  const order = [];
+  entries.forEach((e) => {
+    const key = e.dayKey;
+    if (!key) return;
+    if (!map[key]) {
+      map[key] = [];
+      order.push(key);
+    }
+    map[key].push(e);
+  });
+  order.sort().reverse();
+  order.forEach((k) => map[k].sort((a, b) => a.date.localeCompare(b.date)));
+  return { map, order };
+}
+
+function entriesToText(entries) {
+  const { map, order } = groupByDay(entries);
+  return order.slice().reverse().map((key) => {
+    const body = map[key].map((e) => (e.timeDisplay || "") + "\n" + (e.text || "").trim()).join("\n\n");
+    return "DATE: " + formatDayTitle(key) + "\n\n" + body;
+  }).join("\n\n--------------------------------\n\n");
+}
+
+function quietBtn(label, onClick, extra) {
+  return h("button", Object.assign({
+    onClick,
+    style: {
+      fontSize: 12, padding: "8px 12px", borderRadius: 4, border: "1px solid var(--line)",
+      color: "var(--ink-dim)", background: "transparent", cursor: "pointer",
+    }
+  }, extra || {}), label);
+}
+
+function SummarySection(props) {
+  const items = props.items;
+  if (!items || items.length === 0) return null;
+  return h("div", null,
+    h("p", { style: { fontSize: 12, letterSpacing: 2, textTransform: "uppercase", marginBottom: 12, color: props.color } }, props.title),
+    h("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+      items.map((item, i) => h("p", {
+        key: i,
+        className: "font-display",
+        style: { fontSize: 18, lineHeight: 1.3, color: "var(--ink)", borderLeft: "2px solid " + props.color, paddingLeft: 16, margin: 0 }
+      }, item))
+    )
+  );
+}
+
+function Similarities(props) {
+  const items = props.items || [];
+  if (!items.length) return null;
+  return h("div", { style: { marginTop: 8 } },
+    h("p", { style: { fontSize: 12, letterSpacing: 2, textTransform: "uppercase", marginBottom: 12, color: "var(--ink-dim)" } }, "you've been here before"),
+    h("div", { style: { display: "flex", flexDirection: "column", gap: 16 } },
+      items.map((s, i) => h("div", {
+        key: s.entryId || i,
+        style: { background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 4, padding: 12 }
+      },
+        h("p", { style: { fontSize: 12, color: "var(--amber)", margin: "0 0 8px" } },
+          "You wrote something similar" + (s.when ? " — " + s.when : ".")
+        ),
+        s.quote && h("p", { className: "font-display", style: { fontSize: 16, lineHeight: 1.4, color: "var(--ink)", margin: "0 0 8px" } }, "“" + s.quote + "”"),
+        s.why && h("p", { style: { fontSize: 13, lineHeight: 1.5, color: "var(--ink-dim)", margin: 0 } }, s.why),
+        props.onOpen && s.dayKey && h("button", {
+          onClick: () => props.onOpen(s),
+          style: { marginTop: 10, fontSize: 12, background: "none", border: "none", color: "var(--rust)", cursor: "pointer", padding: 0 }
+        }, "open that day")
+      ))
+    )
+  );
+}
+
+function AnalysisBlock(props) {
+  const s = props.summary;
+  if (!s) return null;
+  const hasAny = (s.happening && s.happening.length) || (s.repeated && s.repeated.length) ||
+    (s.new_this_period && s.new_this_period.length) || (s.worth_noticing && s.worth_noticing.length) ||
+    (s.advice && s.advice.length) || (s.similarities && s.similarities.length);
+  if (!hasAny) return null;
+  return h("div", { className: "fade-up", style: { display: "flex", flexDirection: "column", gap: 32 } },
+    props.date && h("p", { style: { fontSize: 12, color: "var(--ink-dim)" } }, "last read on " + new Date(props.date).toLocaleString()),
+    h(SummarySection, { title: "what's going on", items: s.happening, color: "var(--ink)" }),
+    h(SummarySection, { title: "keeps showing up", items: s.repeated, color: "var(--amber)" }),
+    h(SummarySection, { title: "new this time", items: s.new_this_period, color: "var(--rust)" }),
+    h(SummarySection, { title: "worth noticing", items: s.worth_noticing, color: "var(--ink)" }),
+    h(SummarySection, { title: "if you want it", items: s.advice, color: "var(--amber)" }),
+    h(Similarities, { items: s.similarities, onOpen: props.onOpenSimilarity })
+  );
+}
+
+function AnalyzeButton(props) {
+  return h("div", { style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 12 } },
+    props.children,
+    h("button", {
+      onClick: props.onClick,
+      disabled: props.loading,
+      className: "glow-btn",
+      style: { padding: "12px 20px", borderRadius: 6, background: "var(--rust)", color: "#17140f", border: "none", cursor: props.loading ? "default" : "pointer" }
+    },
+      h("span", { className: "font-display", style: { fontSize: 18 } }, props.loading ? "reading through everything…" : "what's been going on with me")
+    )
+  );
+}
+
+function Composer(props) {
+  const wordCount = props.draft.trim().split(/\s+/).filter(Boolean).length;
+  return h("div", { className: "fade-up", style: { background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 20, marginBottom: 24 } },
+    h("textarea", {
+      value: props.draft,
+      onChange: (e) => props.setDraft(e.target.value),
+      placeholder: "hey man wassup...",
+      rows: 6,
+      style: { width: "100%", background: "transparent", outline: "none", border: "none", color: "var(--ink)", fontSize: 14, lineHeight: 1.6, resize: "none" }
+    }),
+    h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)" } },
+      h("span", { style: { fontSize: 12, color: "var(--ink-dim)" } }, wordCount + " words"),
+      h("button", {
+        onClick: props.onSignOff,
+        disabled: !props.draft.trim(),
+        className: "glow-btn",
+        style: { padding: "8px 16px", borderRadius: 4, fontSize: 12, letterSpacing: 1, textTransform: "uppercase", background: "var(--amber)", color: "#17140f", border: "none", cursor: props.draft.trim() ? "pointer" : "default", opacity: props.draft.trim() ? 1 : 0.3 }
+      }, "sign off")
+    )
+  );
+}
+
+function FlagTags(props) {
+  const e = props.entry;
+  return h("div", { style: { display: "flex", gap: 8 } },
+    (e.flags || []).map((tag) => h("span", {
+      key: tag,
+      style: {
+        fontSize: 10, textTransform: "uppercase", padding: "2px 6px", borderRadius: 4,
+        color: tag === "heavy" ? "#17140f" : "var(--ink)",
+        background: tag === "heavy" ? "var(--rust)" : "transparent",
+        border: tag === "heavy" ? "none" : "1px solid var(--line)"
+      }
+    }, tag)),
+    e.source === "imported" && h("span", { style: { fontSize: 10, textTransform: "uppercase", color: "var(--ink-dim)" } }, "imported")
+  );
+}
+
+function App() {
+  const [user, setUser] = useState(null);
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [entries, setEntries] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [analyses, setAnalyses] = useState({});
+  const [homeSummary, setHomeSummary] = useState(null);
+  const [homeSummaryDate, setHomeSummaryDate] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [initing, setIniting] = useState(true);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [view, setView] = useState("home");
+  const [dayKey, setDayKey] = useState(null);
+  const [entryId, setEntryId] = useState(null);
+  const [period, setPeriod] = useState("week");
+  const [recallDays, setRecallDays] = useState(30);
+  const [recallCustom, setRecallCustom] = useState(false);
+  const jsonRef = useRef(null);
+  const textRef = useRef(null);
+  const googleBtnRef = useRef(null);
+
+  const grouped = useMemo(() => groupByDay(entries), [entries]);
+  const dayEntries = dayKey ? (grouped.map[dayKey] || []) : [];
+  const activeEntry = entryId ? entries.find((e) => e.id === entryId) : null;
+
+  const cacheKey = view === "entry" && entryId ? "entry:" + entryId
+    : view === "day" && dayKey ? "day:" + dayKey
+    : "period:" + period;
+
+  const loadUserData = async () => {
+    try {
+      const d = await api("/api/entries");
+      setEntries(d.entries || []);
+      setAnalyses(d.analyses || {});
+      const days = (d.settings && d.settings.recallDays) || 30;
+      const preset = RECALL_OPTIONS.some((o) => o.value === days);
+      setRecallDays(days);
+      setRecallCustom(!preset);
+      setError("");
+    } catch (e) {
+      if (e.status === 401) {
+        setUser(null);
+      } else {
+        setError(e.message);
+      }
+    }
+  };
+
+  useEffect(() => {
+    // Check initial authentication
+    api("/api/auth/me")
+      .then((data) => {
+        setUser(data.user);
+        setGoogleClientId(data.googleClientId || "");
+        loadUserData();
+      })
+      .catch((e) => {
+        setUser(null);
+      })
+      .finally(() => setIniting(false));
+  }, []);
+
+  const handleGoogleCredential = async (response) => {
+    if (!response || !response.credential) return;
+    try {
+      setIniting(true);
+      const data = await api("/api/auth/google", {
+        method: "POST",
+        body: JSON.stringify({ credential: response.credential }),
+      });
+      setUser(data.user);
+      await loadUserData();
+      setError("");
+    } catch (e) {
+      setError(e.message || "Sign in failed");
+    } finally {
+      setIniting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!user && window.google && googleClientId && googleBtnRef.current) {
+      window.google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: handleGoogleCredential,
+      });
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        theme: "outline",
+        size: "large",
+        text: "continue_with",
+        shape: "rectangular",
+      });
+    }
+  }, [user, googleClientId]);
+
+  const logout = async () => {
+    try {
+      await api("/api/auth/logout", { method: "POST" });
+      setUser(null);
+      setEntries([]);
+      setAnalyses({});
+      setView("home");
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const deleteAccount = async () => {
+    const ok = window.confirm("Are you sure you want to permanently delete your account and all journal entries? This action cannot be undone.");
+    if (!ok) return;
+    try {
+      await api("/api/account", { method: "DELETE" });
+      setUser(null);
+      setEntries([]);
+      setAnalyses({});
+      setView("home");
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const openDay = (key) => { setDayKey(key); setEntryId(null); setView("day"); setError(""); };
+  const openEntry = (e) => { setDayKey(e.dayKey); setEntryId(e.id); setView("entry"); setError(""); };
+  const goHome = () => { setView("home"); setDayKey(null); setEntryId(null); setError(""); };
+
+  const signOff = async () => {
+    if (!draft.trim()) return;
+    try {
+      const res = await api("/api/entries", { method: "POST", body: JSON.stringify({ text: draft.trim() }) });
+      setEntries((prev) => prev.concat([res.entry]));
+      setDraft("");
+      setError("");
+      openDay(res.entry.dayKey);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const saveRecall = async (days) => {
+    setRecallDays(days);
+    try {
+      await api("/api/settings", { method: "POST", body: JSON.stringify({ recallDays: days }) });
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const handleJsonFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      if (json && Array.isArray(json.entries) && json.entries[0] && json.entries[0].text) {
+        await api("/api/entries/bulk", {
+          method: "POST",
+          body: JSON.stringify({
+            items: json.entries.map((ent) => ({ text: ent.text, date: ent.date })),
+          }),
+        });
+      } else {
+        let imported = [];
+        const convs = Array.isArray(json) ? json : [json];
+        convs.forEach((conv) => {
+          const mapping = conv.mapping;
+          if (mapping) {
+            Object.values(mapping).forEach((node) => {
+              const msg = node && node.message;
+              if (msg && msg.author && msg.author.role === "user" && msg.content && msg.content.parts && msg.content.parts.length) {
+                const t = msg.content.parts.join(" ").trim();
+                if (t.length > 20) imported.push(t);
+              }
+            });
+          }
+          (conv.chat_messages || []).forEach((m) => {
+            if (m.sender === "human" && m.text && m.text.length > 20) imported.push(m.text.trim());
+          });
+        });
+        if (imported.length === 0) {
+          setError("Couldn't find recognizable messages in that file.");
+          return;
+        }
+        await api("/api/entries/bulk", { method: "POST", body: JSON.stringify({ texts: imported }) });
+      }
+      await loadUserData();
+      setError("");
+    } catch (err) {
+      setError("Couldn't read that file — try a ChatGPT/Claude .json export, or this app's JSON export.");
+    }
+    if (jsonRef.current) jsonRef.current.value = "";
+  };
+
+  const handleTextFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      await api("/api/import/text", { method: "POST", body: JSON.stringify({ text }) });
+      await loadUserData();
+      setError("");
+    } catch (err) {
+      setError(err.message || "Couldn't import that text.");
+    }
+    if (textRef.current) textRef.current.value = "";
+  };
+
+  const copyAsText = async () => {
+    const text = entriesToText(entries);
+    if (!text) { setError("Nothing to copy yet."); return; }
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      setError("");
+    } catch (err) {
+      setError("Couldn't copy — your browser blocked the clipboard.");
+    }
+  };
+
+  const generate = async () => {
+    if (entries.length === 0) { setError("Write something first."); return; }
+    setLoading(true); setError("");
+    const body = { recallDays, scope: "period", period };
+    if (view === "entry" && entryId) { body.scope = "entry"; body.entryId = entryId; }
+    else if (view === "day" && dayKey) { body.scope = "day"; body.dayKey = dayKey; }
+    try {
+      const d = await api("/api/analyze", { method: "POST", body: JSON.stringify(body) });
+      setAnalyses((prev) => Object.assign({}, prev, { [d.cacheId]: d }));
+      if (d.scope === "period") {
+        setHomeSummary(d.summary);
+        setHomeSummaryDate(d.summaryDate);
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const currentAnalysis = analyses[cacheKey] || null;
+
+  const recallSelect = h("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 } },
+    h("span", { style: { fontSize: 12, color: "var(--ink-dim)" } }, "look back"),
+    h("select", {
+      value: recallCustom ? "custom" : String(RECALL_OPTIONS.find((o) => o.value === recallDays) ? recallDays : "custom"),
+      onChange: (e) => {
+        if (e.target.value === "custom") {
+          setRecallCustom(true);
+        } else {
+          setRecallCustom(false);
+          saveRecall(Number(e.target.value));
+        }
+      }
+    }, RECALL_OPTIONS.map((o) => h("option", { key: String(o.value), value: String(o.value) }, o.label))),
+    recallCustom && h("input", {
+      type: "number", min: 1, max: 3650, value: recallDays,
+      onChange: (e) => setRecallDays(Number(e.target.value) || 1),
+      onBlur: () => saveRecall(recallDays),
+      style: { width: 72 }
+    }),
+    recallCustom && h("span", { style: { fontSize: 12, color: "var(--ink-dim)" } }, "days")
+  );
+
+  const header = h("div", { className: "fade-up", style: { marginBottom: 40 } },
+    h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" } },
+      h("div", null,
+        h("p", { style: { fontSize: 12, letterSpacing: 2, textTransform: "uppercase", color: "var(--amber)", margin: "0 0 4px" } }, "a place, not an app"),
+        h("h1", {
+          className: "font-display",
+          onClick: goHome,
+          style: { fontSize: 40, margin: "8px 0 0", color: "var(--ink)", cursor: "pointer" }
+        }, "wassup")
+      ),
+      user && h("div", { style: { display: "flex", alignItems: "center", gap: 12, marginTop: 8 } },
+        h("span", { style: { fontSize: 12, color: "var(--ink-dim)" } }, user.email),
+        h("button", {
+          onClick: logout,
+          style: { fontSize: 12, background: "none", border: "1px solid var(--line)", color: "var(--ink-dim)", borderRadius: 4, padding: "4px 8px", cursor: "pointer" }
+        }, "sign out")
+      )
+    ),
+    h("p", { style: { fontSize: 14, color: "var(--ink-dim)", marginTop: 8 } },
+      view === "home"
+        ? "write however messy. sign off whenever. we'll notice the patterns so you don't have to."
+        : view === "compose"
+          ? "fresh journal entry"
+          : view === "day"
+            ? formatDayTitle(dayKey)
+            : (activeEntry ? formatDayTitle(activeEntry.dayKey) + " · " + (activeEntry.timeDisplay || "") : "")
+    )
+  );
+
+  const authGate = !user && h("div", { className: "fade-up", style: { background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 32, textAlign: "center", margin: "40px 0" } },
+    h("h2", { className: "font-display", style: { color: "var(--ink)", fontSize: 24, marginTop: 0 } }, "private journal"),
+    h("p", { style: { color: "var(--ink-dim)", fontSize: 14, maxWidth: 420, margin: "0 auto 24px", lineHeight: 1.6 } },
+      "Sign in with your Google account to access your personal daily journal."
+    ),
+    h("div", { style: { display: "flex", justifyContent: "center" }, ref: googleBtnRef }),
+    !googleClientId && h("p", { style: { fontSize: 12, color: "var(--rust)", marginTop: 16 } },
+      "Google Client ID is not configured on server (.env)."
+    )
+  );
+
+  const backRow = view !== "home" && h("div", { style: { marginBottom: 24 } },
+    h("button", {
+      onClick: view === "entry" ? () => { setView("day"); setEntryId(null); } : goHome,
+      style: { fontSize: 12, background: "none", border: "none", color: "var(--ink-dim)", cursor: "pointer", padding: 0 }
+    }, view === "entry" ? "← " + formatDayTitle(dayKey) : "← all days")
+  );
+
+  const homeList = (!initing && user && grouped.order.length > 0) && h("div", { className: "fade-up", style: { marginBottom: 40 } },
+    h("p", { style: { fontSize: 12, letterSpacing: 2, textTransform: "uppercase", color: "var(--ink-dim)", marginBottom: 12 } },
+      grouped.order.length + (grouped.order.length === 1 ? " day" : " days")),
+    h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+      grouped.order.map((key) => {
+        const list = grouped.map[key];
+        const last = list[list.length - 1];
+        return h("button", {
+          key,
+          className: "day-row",
+          onClick: () => openDay(key),
+          style: {
+            textAlign: "left", background: "var(--paper)", border: "1px solid var(--line)",
+            borderRadius: 4, padding: 12, cursor: "pointer", color: "inherit"
+          }
+        },
+          h("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 4 } },
+            h("span", { className: "font-display", style: { fontSize: 18, color: "var(--ink)" } }, formatDayTitle(key)),
+            h("span", { style: { fontSize: 12, color: "var(--ink-dim)" } },
+              list.length + (list.length === 1 ? " note" : " notes"))
+          ),
+          h("p", { style: { fontSize: 13, lineHeight: 1.5, color: "var(--ink-dim)", margin: 0 } }, previewText(last && last.text, 140))
+        );
+      })
+    )
+  );
+
+  const dayTimeline = view === "day" && h("div", { className: "fade-up", style: { marginBottom: 40 } },
+    h("div", { style: { display: "flex", flexDirection: "column", gap: 20 } },
+      dayEntries.map((e) => h("div", {
+        key: e.id,
+        style: { background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 4, padding: 12 }
+      },
+        h("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 8 } },
+          h("button", {
+            onClick: () => openEntry(e),
+            style: { fontSize: 12, color: "var(--rust)", background: "none", border: "none", cursor: "pointer", padding: 0 }
+          }, e.timeDisplay || e.dateDisplay),
+          h(FlagTags, { entry: e })
+        ),
+        h("p", { style: { fontSize: 14, lineHeight: 1.6, color: "var(--ink)", margin: "0 0 8px", whiteSpace: "pre-wrap" } }, e.text),
+        h("button", {
+          onClick: () => openEntry(e),
+          style: { fontSize: 12, background: "none", border: "none", color: "var(--ink-dim)", cursor: "pointer", padding: 0 }
+        }, "this moment →")
+      ))
+    )
+  );
+
+  const entryBody = view === "entry" && activeEntry && h("div", { className: "fade-up", style: { marginBottom: 40 } },
+    h("div", { style: { background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 4, padding: 16 } },
+      h("div", { style: { display: "flex", justifyContent: "space-between", marginBottom: 12 } },
+        h("span", { style: { fontSize: 12, color: "var(--rust)" } }, activeEntry.timeDisplay || activeEntry.dateDisplay),
+        h(FlagTags, { entry: activeEntry })
+      ),
+      h("p", { style: { fontSize: 14, lineHeight: 1.6, color: "var(--ink)", margin: 0, whiteSpace: "pre-wrap" } }, activeEntry.text)
+    )
+  );
+
+  const periodToggle = view === "home" && h("div", { style: { display: "flex", gap: 8, marginBottom: 4 } },
+    ["week", "month"].map((p) => h("button", {
+      key: p,
+      onClick: () => setPeriod(p),
+      style: {
+        fontSize: 12, padding: "6px 10px", borderRadius: 4, cursor: "pointer",
+        border: "1px solid " + (period === p ? "var(--amber)" : "var(--line)"),
+        background: period === p ? "var(--paper)" : "transparent",
+        color: period === p ? "var(--amber)" : "var(--ink-dim)",
+        textTransform: "uppercase", letterSpacing: 1
+      }
+    }, p === "week" ? "this week" : "this month"))
+  );
+
+  if (initing) {
+    return h("div", { style: { maxWidth: 760, margin: "0 auto", padding: "56px 24px" } },
+      header,
+      h("p", { style: { fontSize: 12, color: "var(--ink-dim)" } }, "loading…")
+    );
+  }
+
+  if (!user) {
+    return h("div", { style: { maxWidth: 760, margin: "0 auto", padding: "56px 24px" } },
+      header,
+      authGate,
+      error && h("p", { style: { fontSize: 12, color: "var(--rust)", textAlign: "center" } }, error)
+    );
+  }
+
+  return h("div", { style: { maxWidth: 760, margin: "0 auto", padding: "56px 24px", position: "relative" } },
+    header,
+    backRow,
+    view === "compose" && h(Composer, { draft, setDraft, onSignOff: signOff }),
+    view === "home" && h("div", { className: "fade-up", style: { display: "flex", flexDirection: "column", gap: 16, marginBottom: 24 } },
+      h("div", null,
+        h("button", {
+          onClick: () => setView("compose"),
+          className: "glow-btn",
+          style: {
+            background: "var(--amber)", color: "#17140f", border: "none",
+            padding: "10px 20px", borderRadius: 4, cursor: "pointer", fontSize: 14,
+            fontWeight: "bold", display: "inline-flex", alignItems: "center", gap: 8
+          }
+        }, "+ New Journal")
+      ),
+      h("hr", { style: { border: "none", borderTop: "1px solid var(--line)", margin: "8px 0" } })
+    ),
+    view === "home" && homeList,
+    view === "home" && h("div", { className: "fade-up", style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginTop: 16, marginBottom: 40 } },
+      quietBtn("+ import ChatGPT / Claude export", () => jsonRef.current && jsonRef.current.click()),
+      quietBtn("+ import text", () => textRef.current && textRef.current.click()),
+      quietBtn(copied ? "copied" : "copy as text", copyAsText),
+      h("input", { ref: jsonRef, type: "file", accept: ".json,application/json", onChange: handleJsonFile, style: { display: "none" } }),
+      h("input", { ref: textRef, type: "file", accept: ".txt,text/plain", onChange: handleTextFile, style: { display: "none" } })
+    ),
+    view === "day" && dayTimeline,
+    view === "entry" && entryBody,
+    h("div", { className: "fade-up", style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 12, marginBottom: 40 } },
+      h(AnalyzeButton, { onClick: generate, loading },
+        h("div", { style: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 4 } },
+          periodToggle,
+          recallSelect
+        )
+      ),
+      error && h("p", { style: { fontSize: 12, color: "var(--rust)", maxWidth: 480 } }, error)
+    ),
+    currentAnalysis && h(AnalysisBlock, {
+      summary: currentAnalysis.summary,
+      date: currentAnalysis.summaryDate,
+      onOpenSimilarity: (s) => { if (s.dayKey) openDay(s.dayKey); }
+    }),
+    view === "home" && h("div", { style: { marginTop: 60, paddingTop: 20, borderTop: "1px solid var(--line)" } },
+      h("button", {
+        onClick: deleteAccount,
+        style: { fontSize: 11, background: "none", border: "none", color: "var(--rust)", cursor: "pointer", padding: 0 }
+      }, "delete account & all journal data")
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+</script>
+</body>
+</html>
