@@ -278,35 +278,27 @@ function App() {
 
   useEffect(() => {
     // Check initial authentication
-    api("/api/auth/me")
-      .then((data) => {
-        setUser(data.user);
-        setGoogleClientId(data.googleClientId || "");
-        loadUserData();
-      })
-      .catch((e) => {
-        setUser(null);
-      })
-      .finally(() => setIniting(false));
-  }, []);
-
-  const handleGoogleCredential = async (response) => {
-    if (!response || !response.credential) return;
-    try {
-      setIniting(true);
-      const data = await api("/api/auth/google", {
-        method: "POST",
-        body: JSON.stringify({ credential: response.credential }),
-      });
-      setUser(data.user);
-      await loadUserData();
-      setError("");
-    } catch (e) {
-      setError(e.message || "Sign in failed");
-    } finally {
-      setIniting(false);
+   // Check initial authentication and load Google config
+Promise.all([
+  api("/api/auth/me").catch(() => null),
+  api("/api/config"),
+])
+  .then(([authData, configData]) => {
+    if (authData?.user) {
+      setUser(authData.user);
+      loadUserData();
+    } else {
+      setUser(null);
     }
-  };
+
+    setGoogleClientId(configData.googleClientId || "");
+  })
+  .catch((e) => {
+    setUser(null);
+    setGoogleClientId("");
+  })
+  .finally(() => setIniting(false));
+}, []);
 
   useEffect(() => {
     if (!user && window.google && googleClientId && googleBtnRef.current) {
