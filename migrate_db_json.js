@@ -3,8 +3,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import {
-  getPool,
+  getDb,
   initDb,
+  closeDb,
   findUserByGoogleSub,
   createUserFromGoogle,
   createJournalEntry,
@@ -17,7 +18,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, "db.json");
 
 async function migrate() {
-  console.log("Starting db.json to PostgreSQL migration...");
+  console.log("Starting db.json to MongoDB migration...");
   if (!fs.existsSync(DB_PATH)) {
     console.log("No db.json found. Nothing to migrate.");
     return;
@@ -31,9 +32,9 @@ async function migrate() {
     return;
   }
 
-  const pool = getPool();
-  if (!pool) {
-    console.error("DATABASE_URL is not configured in environment. Set it in .env first.");
+  const database = getDb();
+  if (!database) {
+    console.error("MONGODB_URI is not configured in environment. Set it in .env first.");
     process.exit(1);
   }
 
@@ -72,7 +73,7 @@ async function migrate() {
             dateDisplay: entry.dateDisplay || null,
           });
         } catch (e) {
-          // Ignore duplicate primary keys on re-runs
+          // Ignore duplicate keys on re-runs
         }
       }
       console.log(`Migrated ${legacyUser.entries.length} entries for ${legacyId}.`);
@@ -99,7 +100,7 @@ async function migrate() {
 
 migrate()
   .catch(console.error)
-  .finally(() => {
-    const pool = getPool();
-    if (pool) pool.end();
+  .finally(async () => {
+    await closeDb();
   });
+

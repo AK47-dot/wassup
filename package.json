@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test": "node test_regression.js"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "google-auth-library": "^11.0.2",
-    "pg": "^8.23.0"
+    "mongodb": "^6.21.0"
   }
 }
