@@ -543,6 +543,53 @@ app.post("/api/auth/google", async (req, res) => {
   }
 });
 
+// --- Quick email-only sign-in (test run, no Google needed) ---------------
+app.post("/api/auth/email", async (req, res) => {
+  const { email, name } = req.body || {};
+  const trimmed = typeof email === "string" ? email.trim().toLowerCase() : "";
+  if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    return res.status(400).json({ error: "Enter a valid email." });
+  }
+
+  try {
+    const pseudoSub = `email:${trimmed}`;
+    let user = await findUserByGoogleSub(pseudoSub);
+    if (!user) {
+      user = await createUserFromGoogle({
+        googleSub: pseudoSub,
+        email: trimmed,
+        name: (name && String(name).trim()) || trimmed.split("@")[0],
+        picture: null,
+      });
+    }
+
+    const sessionToken = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await createSession(user.id, sessionToken, expiresAt);
+
+    res.cookie("wassup_session", sessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      path: "/",
+    });
+
+    res.json({
+      user: { id: user.id, email: user.email, name: user.name, picture: user.picture, recallDays: user.recall_days },
+      token: sessionToken,
+    });
+  } catch (err) {
+    console.error("Email sign-in error:", err.message);
+    res.status(500).json({ error: "Sign-in failed." });
+  }
+});
+
+app.get("/api/config", (req, res) => {
+  res.json({
+    googleClientId: GOOGLE_CLIENT_ID || "",
+  });
+});
 // Current User Profile check
 app.get("/api/auth/me", authenticate, (req, res) => {
   res.json({
